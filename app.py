@@ -4,6 +4,11 @@ import hashlib
 import cv2
 import numpy as np
 
+
+from pathlib import Path
+from iris.pipeline import run_full_pipeline, preprocess_iris_image  # our pipeline
+
+
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -17,55 +22,55 @@ from PyQt5.QtCore import Qt, QSize
 
 #PLACEHOLDER BACKEND FUNCTIONS:
 
-def preprocess_iris_image(image_path: str, show_steps: bool = False):
-    """
-    Preprocess an iris image without edge detection — output a clean, enhanced grayscale iris.
-    Steps:
-      1. Convert to grayscale
-      2. Median blur (noise reduction)
-      3. CLAHE (contrast enhancement)
-      4. Reflection detection & inpainting
-      5. Light intensity normalization
-    """
-    img = cv2.imread(image_path)
-    if img is None:
-        raise FileNotFoundError(image_path)
+# def preprocess_iris_image(image_path: str, show_steps: bool = False):
+#     """
+#     Preprocess an iris image without edge detection — output a clean, enhanced grayscale iris.
+#     Steps:
+#       1. Convert to grayscale
+#       2. Median blur (noise reduction)
+#       3. CLAHE (contrast enhancement)
+#       4. Reflection detection & inpainting
+#       5. Light intensity normalization
+#     """
+#     img = cv2.imread(image_path)
+#     if img is None:
+#         raise FileNotFoundError(image_path)
 
-    # 1. Grayscale
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+#     # 1. Grayscale
+#     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # 2. Reduce noise
-    blurred = cv2.medianBlur(gray, 5)
+#     # 2. Reduce noise
+#     blurred = cv2.medianBlur(gray, 5)
 
-    # 3. Contrast enhancement
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(blurred)
+#     # 3. Contrast enhancement
+#     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+#     enhanced = clahe.apply(blurred)
 
-    # 4. Reflection removal
-    reflection_mask = cv2.inRange(enhanced, 240, 255)
-    cleaned = cv2.inpaint(enhanced, reflection_mask, 3, cv2.INPAINT_TELEA)
+#     # 4. Reflection removal
+#     reflection_mask = cv2.inRange(enhanced, 240, 255)
+#     cleaned = cv2.inpaint(enhanced, reflection_mask, 3, cv2.INPAINT_TELEA)
 
-    # 5. Normalize intensity (optional)
-    normalized = cv2.normalize(cleaned, None, 0, 255, cv2.NORM_MINMAX)
+#     # 5. Normalize intensity (optional)
+#     normalized = cv2.normalize(cleaned, None, 0, 255, cv2.NORM_MINMAX)
 
-    if show_steps:
-        cv2.imshow("Original", img)
-        cv2.imshow("Enhanced (CLAHE)", enhanced)
-        cv2.imshow("Cleaned (Reflections Removed)", cleaned)
-        cv2.imshow("Normalized Output", normalized)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+#     if show_steps:
+#         cv2.imshow("Original", img)
+#         cv2.imshow("Enhanced (CLAHE)", enhanced)
+#         cv2.imshow("Cleaned (Reflections Removed)", cleaned)
+#         cv2.imshow("Normalized Output", normalized)
+#         cv2.waitKey(0)
+#         cv2.destroyAllWindows()
 
-    return normalized
+#     return normalized
 
 
-def compute_template(image_path: str) -> str:
-    """Replace this with your actual encoder (e.g., iris code)."""
-    edges = preprocess_iris_image(image_path, show_steps=False)
-    # Flatten binary edge map to bytes
-    flat_bytes = edges.tobytes()
-    h = hashlib.sha1(flat_bytes)  # or use a custom feature extractor later
-    return h.hexdigest()
+# def compute_template(image_path: str) -> str:
+#     """Replace this with your actual encoder (e.g., iris code)."""
+#     edges = preprocess_iris_image(image_path, show_steps=False)
+#     # Flatten binary edge map to bytes
+#     flat_bytes = edges.tobytes()
+#     h = hashlib.sha1(flat_bytes)  # or use a custom feature extractor later
+#     return h.hexdigest()
 
 def compare_templates(t1: str, t2: str) -> Tuple[float, float]:
     """ Replace with your real Hamming distance routine. """
@@ -75,6 +80,25 @@ def compare_templates(t1: str, t2: str) -> Tuple[float, float]:
     hamming = diffs / L if L > 0 else 1.0
     similarity = max(0.0, 100.0 * (1.0 - hamming))
     return round(hamming, 4), round(similarity, 2)
+
+def compute_template(image_path: str) -> str:
+    """
+    Simple placeholder 'encoder': hash the normalized image bytes so we’re consistent with segmentation.
+    It runs the pipeline to guarantee normalized images even if called directly.
+    """
+    try:
+        _, normalized_path, _ = run_full_pipeline(image_path, out_root="outputs")
+        arr = cv2.imread(normalized_path, cv2.IMREAD_GRAYSCALE)
+        if arr is None:
+            raise RuntimeError("Cannot read normalized image.")
+        flat_bytes = arr.tobytes()
+    except Exception:
+        # fall back to preprocessing only (should be rare)
+        pre = preprocess_iris_image(image_path)
+        flat_bytes = pre.tobytes()
+
+    h = hashlib.sha1(flat_bytes)
+    return h.hexdigest()
 
 def search_dataset_for_best_match(query_template: str, dataset_root: str) -> Optional[Tuple[str, str, str, float, float]]:
     """ Scans dataset_root for structure dataset/<subject>/<Left or Right>/*.png (or jpg).
@@ -117,6 +141,7 @@ class IrisApp(QWidget):
         self.setWindowTitle("Iris Recognition — GUI")
         self.setMinimumSize(920, 600)
         self._dataset_root = "dataset"  # default dataset path; user can change by editing code or we can add UI later
+        self._output_dir = "outputs"
 
         self.setStyleSheet(self._qss())
         self._build_ui()
@@ -281,14 +306,30 @@ class IrisApp(QWidget):
         return tab
 
 
+    # def _on_verify_upload(self):
+    #     path, _ = QFileDialog.getOpenFileName(self, "Select iris image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+    #     if path:
+    #         self.verify_image_path.setText(path)
+    #         edges = preprocess_iris_image(path, show_steps=False)
+    #         preview_path = "temp_preprocessed.png"
+    #         cv2.imwrite(preview_path, edges)
+    #         self._display_pixmap(self.verify_image_label, preview_path)
+
     def _on_verify_upload(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select iris image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if path:
             self.verify_image_path.setText(path)
-            edges = preprocess_iris_image(path, show_steps=False)
-            preview_path = "temp_preprocessed.png"
-            cv2.imwrite(preview_path, edges)
-            self._display_pixmap(self.verify_image_label, preview_path)
+            try:
+                seg_path, norm_path, _ = run_full_pipeline(path, out_root=self._output_dir)
+                # show segmented overlay in the GUI
+                self._display_pixmap(self.verify_image_label, seg_path)
+                # stash normalized path for later if you want (optional)
+                self._verify_last_normalized = norm_path
+                self.verify_result_box.setPlainText(
+                    f"Saved:\n  Segmented → {seg_path}\n  Normalized → {norm_path}"
+                )
+            except Exception as e:
+                self.verify_result_box.setPlainText(f"Segmentation/normalization failed: {e}")
 
     def _on_run_verification(self):
         subject = self.verify_subject_input.text().strip()
@@ -342,11 +383,26 @@ class IrisApp(QWidget):
                 f"\n(PLACEHOLDER) Add subject images to dataset/{subject}/Left or Right/ to enable verification."
             )
 
+    # def _on_ident_upload(self):
+    #     path, _ = QFileDialog.getOpenFileName(self, "Select iris image to identify", "", "Images (*.png *.jpg *.jpeg *.bmp)")
+    #     if path:
+    #         self.ident_image_path.setText(path)
+    #         self._display_pixmap(self.ident_query_image, path)
+
     def _on_ident_upload(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select iris image to identify", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if path:
             self.ident_image_path.setText(path)
-            self._display_pixmap(self.ident_query_image, path)
+            try:
+                seg_path, norm_path, _ = run_full_pipeline(path, out_root=self._output_dir)
+                # show segmented overlay (query image) on the left preview
+                self._display_pixmap(self.ident_query_image, seg_path)
+                self._ident_last_normalized = norm_path
+                self.ident_result_box.setPlainText(
+                    f"Saved:\n  Segmented → {seg_path}\n  Normalized → {norm_path}"
+                )
+            except Exception as e:
+                self.ident_result_box.setPlainText(f"Segmentation/normalization failed: {e}")
 
     def _on_run_identification(self):
         img_path = self.ident_image_path.text().strip()
