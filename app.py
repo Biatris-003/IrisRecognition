@@ -7,7 +7,7 @@ import json
 import re
 
 from pathlib import Path
-from iris.pipeline import run_full_pipeline, preprocess_iris_image  # our pipeline
+from iris.pipeline import build_iris_codes_dataset, run_full_pipeline, preprocess_iris_image  # our pipeline
 
 
 from pathlib import Path
@@ -513,6 +513,7 @@ class IrisApp(QWidget):
         """
 
 def main():
+    # build_iris_codes_dataset()
     app = QApplication(sys.argv)
     window = IrisApp()
     window.show()
