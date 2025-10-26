@@ -3,7 +3,8 @@ import os
 import hashlib
 import cv2
 import numpy as np
-
+import json
+import re
 
 from pathlib import Path
 from iris.pipeline import run_full_pipeline, preprocess_iris_image  # our pipeline
@@ -19,120 +20,81 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QFont
 from PyQt5.QtCore import Qt, QSize
+from iris.feature_extraction import encode_iris
 
-#PLACEHOLDER BACKEND FUNCTIONS:
-
-# def preprocess_iris_image(image_path: str, show_steps: bool = False):
-#     """
-#     Preprocess an iris image without edge detection — output a clean, enhanced grayscale iris.
-#     Steps:
-#       1. Convert to grayscale
-#       2. Median blur (noise reduction)
-#       3. CLAHE (contrast enhancement)
-#       4. Reflection detection & inpainting
-#       5. Light intensity normalization
-#     """
-#     img = cv2.imread(image_path)
-#     if img is None:
-#         raise FileNotFoundError(image_path)
-
-#     # 1. Grayscale
-#     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-#     # 2. Reduce noise
-#     blurred = cv2.medianBlur(gray, 5)
-
-#     # 3. Contrast enhancement
-#     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-#     enhanced = clahe.apply(blurred)
-
-#     # 4. Reflection removal
-#     reflection_mask = cv2.inRange(enhanced, 240, 255)
-#     cleaned = cv2.inpaint(enhanced, reflection_mask, 3, cv2.INPAINT_TELEA)
-
-#     # 5. Normalize intensity (optional)
-#     normalized = cv2.normalize(cleaned, None, 0, 255, cv2.NORM_MINMAX)
-
-#     if show_steps:
-#         cv2.imshow("Original", img)
-#         cv2.imshow("Enhanced (CLAHE)", enhanced)
-#         cv2.imshow("Cleaned (Reflections Removed)", cleaned)
-#         cv2.imshow("Normalized Output", normalized)
-#         cv2.waitKey(0)
-#         cv2.destroyAllWindows()
-
-#     return normalized
-
-
-# def compute_template(image_path: str) -> str:
-#     """Replace this with your actual encoder (e.g., iris code)."""
-#     edges = preprocess_iris_image(image_path, show_steps=False)
-#     # Flatten binary edge map to bytes
-#     flat_bytes = edges.tobytes()
-#     h = hashlib.sha1(flat_bytes)  # or use a custom feature extractor later
-#     return h.hexdigest()
-
-def compare_templates(t1: str, t2: str) -> Tuple[float, float]:
-    """ Replace with your real Hamming distance routine. """
-    # Make equal length
-    L = min(len(t1), len(t2))
-    diffs = sum(1 for a, b in zip(t1[:L], t2[:L]) if a != b)
-    hamming = diffs / L if L > 0 else 1.0
-    similarity = max(0.0, 100.0 * (1.0 - hamming))
-    return round(hamming, 4), round(similarity, 2)
-
-def compute_template(image_path: str) -> str:
+def compute_template(image_path: str) -> np.ndarray:
     """
-    Simple placeholder 'encoder': hash the normalized image bytes so we’re consistent with segmentation.
-    It runs the pipeline to guarantee normalized images even if called directly.
+    Compute iris code using the existing encode_iris function.
+    Returns binary iris code as numpy array.
     """
     try:
         _, normalized_path, _ = run_full_pipeline(image_path, out_root="outputs")
-        arr = cv2.imread(normalized_path, cv2.IMREAD_GRAYSCALE)
-        if arr is None:
+        norm = cv2.imread(normalized_path, cv2.IMREAD_GRAYSCALE)
+        if norm is None:
             raise RuntimeError("Cannot read normalized image.")
-        flat_bytes = arr.tobytes()
-    except Exception:
-        # fall back to preprocessing only (should be rare)
-        pre = preprocess_iris_image(image_path)
-        flat_bytes = pre.tobytes()
+        iris_code = encode_iris(norm)
+        return iris_code
+    except Exception as e:
+        raise RuntimeError(f"Failed to compute iris code: {str(e)}")
 
-    h = hashlib.sha1(flat_bytes)
-    return h.hexdigest()
-
-def search_dataset_for_best_match(query_template: str, dataset_root: str) -> Optional[Tuple[str, str, str, float, float]]:
-    """ Scans dataset_root for structure dataset/<subject>/<Left or Right>/*.png (or jpg).
-    For each image found, compute template and compare; return best match info:
-      (subject_name, iris_side, image_path, hamming, similarity)
-    Returns None if no images found.
-    NOTE: This uses placeholder compute_template + compare_templates.
+def compare_templates(t1: np.ndarray, t2: np.ndarray) -> Tuple[float, float]:
     """
-    dataset_root = Path(dataset_root)
-    if not dataset_root.exists():
+    Compare two iris codes using Hamming distance.
+    Returns (hamming_distance, similarity_percentage).
+    """
+    return compute_hamming_distance(t1, t2)
+
+def search_dataset_for_best_match(query_template, codes_file="iris_codes/iris_codes.json"):
+    if not os.path.exists(codes_file):
+        print("❌ No saved iris codes found. Run enrollment first.")
         return None
-    best = None  # tuple defined above
-    for subject_dir in sorted(dataset_root.iterdir()):
-        if not subject_dir.is_dir():
-            continue
-        subject = subject_dir.name
-        # look for Left/Right or any images directly as fallback
-        for side_dir in sorted(subject_dir.iterdir()):
-            if side_dir.is_dir():
-                iris_side = side_dir.name
-                for img_path in sorted(side_dir.iterdir()):
-                    if img_path.is_file() and img_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
-                        t = compute_template(str(img_path))
-                        h, s = compare_templates(query_template, t)
-                        if best is None or h < best[3]:
-                            best = (subject, iris_side, str(img_path), h, s)
-            else:
-                # potentially image directly under subject folder
-                if side_dir.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
-                    t = compute_template(str(side_dir))
-                    h, s = compare_templates(query_template, t)
-                    if best is None or h < best[3]:
-                        best = (subject, "Unknown", str(side_dir), h, s)
-    return best
+
+    with open(codes_file, "r") as f:
+        saved = json.load(f)
+
+    best_subject = None
+    best_hamming = 1.0
+    best_similarity = 0.0
+
+    for subject_id, template_list in saved.items():
+        stored_template = np.array(template_list, dtype=np.uint8)
+
+        hamming, similarity = compare_templates(query_template, stored_template)
+
+        if hamming < best_hamming:  # keep best match
+            best_hamming = hamming
+            best_similarity = similarity
+            best_subject = subject_id
+
+    if best_subject is None:
+        return None
+
+    #  Left/Right labels "Unknown"
+    return best_subject, "Unknown", best_hamming, best_similarity
+
+
+def compute_hamming_distance(code1: np.ndarray, code2: np.ndarray) -> Tuple[float, float]:
+    """
+    Compute Hamming distance and similarity between two iris codes.
+    Handles rotation by trying small shifts.
+    Returns (hamming_distance, similarity_percentage).
+    """
+    if code1.shape != code2.shape:
+        raise ValueError("Iris codes must have the same length")
+
+    length = len(code1)
+    min_hamming = 1.0
+    max_shift = 8  # ±8 pixels for rotation compensation
+
+    for shift in range(-max_shift, max_shift + 1):
+        shifted_code1 = np.roll(code1, shift)
+        diffs = np.sum(shifted_code1 != code2)
+        hamming = diffs / length if length > 0 else 1.0
+        min_hamming = min(min_hamming, hamming)
+
+    similarity = max(0.0, 100.0 * (1.0 - min_hamming))
+    return round(min_hamming, 4), round(similarity, 2)
+
 
 #GUI
 class IrisApp(QWidget):
@@ -140,7 +102,7 @@ class IrisApp(QWidget):
         super().__init__()
         self.setWindowTitle("Iris Recognition — GUI")
         self.setMinimumSize(920, 600)
-        self._dataset_root = "dataset"  # default dataset path; user can change by editing code or we can add UI later
+        self._dataset_root = "CASIA-Iris-Thousand"  # default dataset path 
         self._output_dir = "outputs"
 
         self.setStyleSheet(self._qss())
@@ -180,7 +142,7 @@ class IrisApp(QWidget):
         left_layout.setFormAlignment(Qt.AlignTop)
 
         self.verify_subject_input = QLineEdit()
-        self.verify_subject_input.setPlaceholderText("Enter subject name exactly (e.g. subject01)")
+        self.verify_subject_input.setPlaceholderText("Enter subject name exactly (e.g. person_001)")
         left_layout.addRow("Subject name:", self.verify_subject_input)
 
         self.verify_image_path = QLineEdit()
@@ -279,11 +241,11 @@ class IrisApp(QWidget):
         self.ident_query_image.setAlignment(Qt.AlignCenter)
         right_layout.addWidget(self.ident_query_image)
 
-        self.ident_matched_image = QLabel()
-        self.ident_matched_image.setFixedSize(380, 160)
-        self.ident_matched_image.setFrameShape(QFrame.Box)
-        self.ident_matched_image.setAlignment(Qt.AlignCenter)
-        right_layout.addWidget(self.ident_matched_image)
+        # self.ident_matched_image = QLabel()
+        # self.ident_matched_image.setFixedSize(380, 160)
+        # self.ident_matched_image.setFrameShape(QFrame.Box)
+        # self.ident_matched_image.setAlignment(Qt.AlignCenter)
+        # right_layout.addWidget(self.ident_matched_image)
 
         stats_box = QGroupBox("Match Info")
         stats_layout = QFormLayout()
@@ -292,7 +254,7 @@ class IrisApp(QWidget):
         self.ident_match_hamming_label = QLabel("-")
         self.ident_match_similarity_label = QLabel("-")
         stats_layout.addRow("Subject:", self.ident_match_subject_label)
-        stats_layout.addRow("Side (Left/Right):", self.ident_match_side_label)
+        #stats_layout.addRow("Side (Left/Right):", self.ident_match_side_label)
         stats_layout.addRow("Hamming:", self.ident_match_hamming_label)
         stats_layout.addRow("Similarity %:", self.ident_match_similarity_label)
         stats_box.setLayout(stats_layout)
@@ -304,16 +266,6 @@ class IrisApp(QWidget):
 
         tab.setLayout(main_layout)
         return tab
-
-
-    # def _on_verify_upload(self):
-    #     path, _ = QFileDialog.getOpenFileName(self, "Select iris image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
-    #     if path:
-    #         self.verify_image_path.setText(path)
-    #         edges = preprocess_iris_image(path, show_steps=False)
-    #         preview_path = "temp_preprocessed.png"
-    #         cv2.imwrite(preview_path, edges)
-    #         self._display_pixmap(self.verify_image_label, preview_path)
 
     def _on_verify_upload(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select iris image", "", "Images (*.png *.jpg *.jpeg *.bmp)")
@@ -331,63 +283,76 @@ class IrisApp(QWidget):
             except Exception as e:
                 self.verify_result_box.setPlainText(f"Segmentation/normalization failed: {e}")
 
+
     def _on_run_verification(self):
         subject = self.verify_subject_input.text().strip()
         img_path = self.verify_image_path.text().strip()
+        self.iris_codes="iris_codes"
         if not subject:
-            self.verify_result_box.setPlainText("Please enter a subject name to verify against.")
+            self.verify_result_box.setPlainText("Please enter a subject ID (e.g., person_000).")
             return
         if not img_path or not os.path.exists(img_path):
-            self.verify_result_box.setPlainText("Please upload a valid image file.")
+            self.verify_result_box.setPlainText("Please upload a valid .jpg image file.")
             return
 
-        subject_dir = Path(self._dataset_root) / subject
-        match_image = None
-        if subject_dir.exists():
-            for p in subject_dir.rglob("*"):
-                if p.is_file() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp"):
-                    match_image = str(p)
-                    break
+        try:
+            # Load iris code database
+            try:
+                with open(os.path.join(self.iris_codes,"iris_codes.json"), "r") as f:
+                    db = json.load(f)
+            except FileNotFoundError:
+                self.verify_result_box.setPlainText("Iris code database not found. Please enroll subjects first.")
+                return
 
-        t_query = compute_template(img_path)
-        if match_image:
-            t_ref = compute_template(match_image)
+            # Check if subject exists in database
+            if subject not in db:
+                self.verify_result_box.setPlainText(
+                    f"Subject '{subject}' not found in iris code database '{self.iris_codes}'."
+                )
+                self.verify_hamming_label.setText("-")
+                self.verify_similarity_label.setText("-")
+                self.verify_matched_subject_label.setText("Not found")
+                return
+
+            # Compute query iris code
+            t_query = compute_template(img_path)
+            t_ref = np.array(db[subject], dtype=np.uint8)
             hamming, similarity = compare_templates(t_query, t_ref)
-            matched_subject = subject
-            matched_image_path = match_image
-        else:
-            t_ref = None
-            hamming, similarity = 1.0, 0.0
-            matched_subject = "Not found in dataset"
-            matched_image_path = None
 
-        # Update UI
-        self.verify_hamming_label.setText(str(hamming))
-        self.verify_similarity_label.setText(f"{similarity} %")
-        self.verify_matched_subject_label.setText(matched_subject)
+            # Threshold for verification
+            threshold = 0.342  
+            verified = hamming <= threshold
+            matched_subject = subject if verified else "No Match"
 
-        # Show matched image preview if available
-        if matched_image_path:
-            # show matched image in the right preview as small overlay? We'll show the matched file path in results
+            # Update UI
+            self.verify_hamming_label.setText(f"{hamming:.4f}")
+            self.verify_similarity_label.setText(f"{similarity:.2f} %")
+            self.verify_matched_subject_label.setText(matched_subject)
             self.verify_result_box.setPlainText(
                 f"Verification against subject: {subject}\n"
-                f"Matched image used from dataset: {matched_image_path}\n"
-                f"Hamming distance: {hamming}\n"
-                f"Similarity: {similarity} %\n"
-                f"\n(PLACEHOLDER) Replace compute_template/compare_templates with your real backend."
-            )
-        else:
-            self.verify_result_box.setPlainText(
-                f"Subject '{subject}' not found under dataset root '{self._dataset_root}'.\n"
-                f"Hamming distance: {hamming}\nSimilarity: {similarity} %\n"
-                f"\n(PLACEHOLDER) Add subject images to dataset/{subject}/Left or Right/ to enable verification."
+                f"Hamming distance: {hamming:.4f}\n"
+                f"Similarity: {similarity:.2f} %\n"
+                f"Result: {'Verified' if verified else 'Not Verified'}"
             )
 
-    # def _on_ident_upload(self):
-    #     path, _ = QFileDialog.getOpenFileName(self, "Select iris image to identify", "", "Images (*.png *.jpg *.jpeg *.bmp)")
-    #     if path:
-    #         self.ident_image_path.setText(path)
-    #         self._display_pixmap(self.ident_query_image, path)
+            # Display matched image from dataset if verified
+            if verified:
+                subject_num = subject.replace("person_", "")  # Convert person_000 to 000
+                subject_dir = Path(self._dataset_root) / f"S1{subject_num}"
+                if subject_dir.exists():
+                    for side in ("Left", "Right"):
+                        side_dir = subject_dir / side
+                        if side_dir.exists():
+                            for p in side_dir.glob("*.jpg"):
+                                self._display_pixmap(self.verify_image_label, str(p))
+                                break
+                            break
+        except Exception as e:
+            self.verify_result_box.setPlainText(f"Verification failed: {str(e)}")
+            self.verify_hamming_label.setText("-")
+            self.verify_similarity_label.setText("-")
+            self.verify_matched_subject_label.setText("Error")
+
 
     def _on_ident_upload(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select iris image to identify", "", "Images (*.png *.jpg *.jpeg *.bmp)")
@@ -407,33 +372,48 @@ class IrisApp(QWidget):
     def _on_run_identification(self):
         img_path = self.ident_image_path.text().strip()
         if not img_path or not os.path.exists(img_path):
-            self.ident_result_box.setPlainText("Please upload a valid image file.")
+            self.ident_result_box.setPlainText("Please upload a valid .jpg image file.")
             return
-        query_t = compute_template(img_path)
 
-        best = search_dataset_for_best_match(query_t, self._dataset_root)
-        if best is None:
-            self.ident_result_box.setPlainText(f"No images found under dataset root '{self._dataset_root}'.")
+        try:
+            # Compute query iris code
+            query_t = compute_template(img_path)
+            # Search dataset for best match
+            best = search_dataset_for_best_match(query_t)
+            if best is None:
+                self.ident_result_box.setPlainText("No match found in saved iris codes.")
+                self._clear_ident_results()
+                return
+
+            subject, side, hamming, similarity = best
+            matched_img_path = ""
+            # Threshold for identification
+            threshold = 0.342  
+            confidence = "High" if hamming <= threshold else "Low"
+            matched_subject = subject if hamming <= threshold else "Unknown"
+
+            # Update UI
+            self.ident_match_subject_label.setText(matched_subject)
+            self.ident_match_side_label.setText(side)
+            self.ident_match_hamming_label.setText(f"{hamming:.4f}")
+            self.ident_match_similarity_label.setText(f"{similarity:.2f} %")
+            #self._display_pixmap(self.ident_matched_image, matched_img_path)
+            self.ident_result_box.setPlainText(
+                f"Best match found:\n"
+                f"Subject: {matched_subject}\n"
+                # f"Side: {side}\n"
+                # f"Matched image: {matched_img_path}\n"
+                f"Hamming distance: {hamming:.4f}\n"
+                f"Similarity: {similarity:.2f} %\n"
+                f"Confidence: {confidence}"
+            )
+        except Exception as e:
+            self.ident_result_box.setPlainText(f"Identification failed: {str(e)}")
             self._clear_ident_results()
-            return
-
-        subject, side, matched_img_path, hamming, similarity = best
-
-        # Update UI
-        self.ident_result_box.setPlainText(
-            f"Best match found:\nSubject: {subject}\nSide: {side}\nMatched image: {matched_img_path}\nHamming: {hamming}\nSimilarity: {similarity} %\n\n(PLACEHOLDER) Replace search_dataset_for_best_match with your real identification logic."
-        )
-        self.ident_match_subject_label.setText(subject)
-        self.ident_match_side_label.setText(side)
-        self.ident_match_hamming_label.setText(str(hamming))
-        self.ident_match_similarity_label.setText(f"{similarity} %")
-
-        # Show matched image
-        self._display_pixmap(self.ident_matched_image, matched_img_path)
 
     def _clear_ident_results(self):
         self.ident_query_image.clear()
-        self.ident_matched_image.clear()
+        #self.ident_matched_image.clear()
         self.ident_match_subject_label.setText("-")
         self.ident_match_side_label.setText("-")
         self.ident_match_hamming_label.setText("-")
