@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 import json
 import re
+from scipy.spatial.distance import hamming
 
 from pathlib import Path
 from iris.pipeline import run_full_pipeline, preprocess_iris_image  # our pipeline
@@ -79,19 +80,19 @@ def compute_hamming_distance(code1: np.ndarray, code2: np.ndarray) -> Tuple[floa
     Handles rotation by trying small shifts.
     Returns (hamming_distance, similarity_percentage).
     """
-    if code1.shape != code2.shape:
-        raise ValueError("Iris codes must have the same length")
+    # if code1.shape != code2.shape:
+    #     raise ValueError("Iris codes must have the same length")
 
-    length = len(code1)
-    min_hamming = 1.0
-    max_shift = 8  # ±8 pixels for rotation compensation
+    # length = len(code1)
+    # min_hamming = 1.0
+    # max_shift = 8  # ±8 pixels for rotation compensation
 
-    for shift in range(-max_shift, max_shift + 1):
-        shifted_code1 = np.roll(code1, shift)
-        diffs = np.sum(shifted_code1 != code2)
-        hamming = diffs / length if length > 0 else 1.0
-        min_hamming = min(min_hamming, hamming)
-
+    # for shift in range(-max_shift, max_shift + 1):
+    #     shifted_code1 = np.roll(code1, shift)
+    #     diffs = np.sum(shifted_code1 != code2)
+    #     hamming = diffs / length if length > 0 else 1.0
+    #     min_hamming = min(min_hamming, hamming)
+    min_hamming =  hamming(code1, code2)
     similarity = max(0.0, 100.0 * (1.0 - min_hamming))
     return round(min_hamming, 4), round(similarity, 2)
 
