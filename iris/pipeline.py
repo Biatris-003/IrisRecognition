@@ -269,3 +269,4 @@ def build_iris_codes_dataset(dataset_dir: str = "CASIA-Iris-Thousand",
           f"Total images stored: {stored_total}. "
           f"Codes at {iris_codes_file}")
     return mapping
+ 

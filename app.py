@@ -513,7 +513,7 @@ class IrisApp(QWidget):
         """
 
 def main():
-    build_iris_codes_dataset()
+    # build_iris_codes_dataset()
     app = QApplication(sys.argv)
     window = IrisApp()
     window.show()
