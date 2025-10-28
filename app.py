@@ -182,9 +182,11 @@ class IrisApp(QWidget):
         self.verify_hamming_label = QLabel("-")
         self.verify_similarity_label = QLabel("-")
         self.verify_matched_subject_label = QLabel("-")
+        self.verify_err_label = QLabel("-")
         stats_layout.addRow("Hamming:", self.verify_hamming_label)
         stats_layout.addRow("Similarity %:", self.verify_similarity_label)
         stats_layout.addRow("Matched Subject:", self.verify_matched_subject_label)
+        stats_layout.addRow("ERR:", self.verify_err_label)
         stats_box.setLayout(stats_layout)
         right_layout.addWidget(stats_box)
         right_group.setLayout(right_layout)
@@ -253,10 +255,12 @@ class IrisApp(QWidget):
         self.ident_match_side_label = QLabel("-")
         self.ident_match_hamming_label = QLabel("-")
         self.ident_match_similarity_label = QLabel("-")
+        self.ident_err_label = QLabel("-")
         stats_layout.addRow("Subject:", self.ident_match_subject_label)
         #stats_layout.addRow("Side (Left/Right):", self.ident_match_side_label)
         stats_layout.addRow("Hamming:", self.ident_match_hamming_label)
         stats_layout.addRow("Similarity %:", self.ident_match_similarity_label)
+        stats_layout.addRow("ERR:", self.ident_err_label)
         stats_box.setLayout(stats_layout)
         right_layout.addWidget(stats_box)
 
@@ -323,8 +327,9 @@ class IrisApp(QWidget):
             threshold = 0.342  
             verified = hamming <= threshold
             matched_subject = subject if verified else "No Match"
-
+            eer = self._compute_eer_from_db(db)
             # Update UI
+            self.verify_err_label.setText(f"{eer:.4f}")
             self.verify_hamming_label.setText(f"{hamming:.4f}")
             self.verify_similarity_label.setText(f"{similarity:.2f} %")
             self.verify_matched_subject_label.setText(matched_subject)
@@ -376,6 +381,19 @@ class IrisApp(QWidget):
             return
 
         try:
+
+            db_path = os.path.join("iris_codes", "iris_codes.json")
+            try:
+                with open(db_path, "r") as f:
+                    db = json.load(f)                     # { "person_001": [0,1,0,…], … }
+            except FileNotFoundError:
+                self.ident_result_box.setPlainText(
+                    "Iris code database not found. Please enroll subjects first."
+                )
+                self._clear_ident_results()
+                self.ident_err_label.setText("-")
+                return
+
             # Compute query iris code
             query_t = compute_template(img_path)
             # Search dataset for best match
@@ -391,8 +409,10 @@ class IrisApp(QWidget):
             threshold = 0.342  
             confidence = "High" if hamming <= threshold else "Low"
             matched_subject = subject if hamming <= threshold else "Unknown"
+            eer = self._compute_eer_from_db(db)
 
             # Update UI
+            self.ident_err_label.setText(f"{eer:.4f}")
             self.ident_match_subject_label.setText(matched_subject)
             self.ident_match_side_label.setText(side)
             self.ident_match_hamming_label.setText(f"{hamming:.4f}")
@@ -410,6 +430,48 @@ class IrisApp(QWidget):
         except Exception as e:
             self.ident_result_box.setPlainText(f"Identification failed: {str(e)}")
             self._clear_ident_results()
+
+    def _compute_eer_from_db(self, db_dict: dict) -> float:
+            """
+            Returns the Equal-Error-Rate (EER) for the current database.
+            * intra-subject  -> genuine scores (same person)
+            * inter-subject  -> impostor scores (different persons)
+            """
+            genuine = []      # Hamming distances where subject A == subject B
+            impostor = []     # Hamming distances where subject A != subject B
+
+            subjects = list(db_dict.keys())
+            codes = {s: np.array(db_dict[s], dtype=np.uint8) for s in subjects}
+
+            for i, s1 in enumerate(subjects):
+                c1 = codes[s1]
+                for s2 in subjects[i:]:                     # avoid double-counting
+                    c2 = codes[s2]
+                    h, _ = compare_templates(c1, c2)        # reuse the same function
+                    if s1 == s2:
+                        genuine.append(h)
+                    else:
+                        impostor.append(h)
+
+            # If there is only one subject -> no impostor scores -> EER = 0
+            if not impostor:
+                return 0.0
+
+            # Convert to numpy for fast sorting
+            genuine  = np.array(genuine)
+            impostor = np.array(impostor)
+
+            # Possible decision thresholds
+            thresholds = np.linspace(0.0, 0.5, 500)
+
+            far = np.array([np.mean(impostor >= t) for t in thresholds])   # False Accept Rate
+            frr = np.array([np.mean(genuine  <  t) for t in thresholds])   # False Reject Rate
+
+            # EER = point where FAR == FRR
+            diff = np.abs(far - frr)
+            best_idx = np.argmin(diff)
+            eer = (far[best_idx] + frr[best_idx]) / 2.0
+            return float(eer)
 
     def _clear_ident_results(self):
         self.ident_query_image.clear()
