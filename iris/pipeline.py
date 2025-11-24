@@ -28,34 +28,31 @@ def preprocess_iris_image(image_path: str) -> np.ndarray:
     return normalized
 
 def run_full_pipeline(image_path: str, out_root: str = "outputs",
-                      radial_res:int = 64, angular_res:int = 360) -> Tuple[str, str, Tuple[int,int,int,int]]:
+                      radial_res: int = 64, angular_res: int = 360) -> Tuple[str, str, Tuple[int, int, int, int]]:
     """
-    Returns (segmented_path, normalized_path, (cx,cy,r_pupil,r_iris))
+    Returns (segmented_path, normalized_path, (cx, cy, r_pupil, r_iris))
     """
     out_dir = ensure_dir(out_root)
 
-    # preprocess (for segmentation); keep original BGR for overlay
+    # Preprocess (for sclera segmentation); keep original BGR for pupil segmentation
     bgr = cv2.imread(image_path)
     if bgr is None:
         raise FileNotFoundError(image_path)
     pre = preprocess_iris_image(image_path)
 
-    # pupil → iris
-    cx, cy, r_pupil = find_pupil(pre)
+    # Pupil segmentation on the original image
+    cx, cy, r_pupil = find_pupil(bgr)
+
+    # Iris segmentation on the preprocessed image
     r_iris = find_iris(pre, cx, cy, r_pupil)
 
-    # overlay
-    overlay = draw_segmentation_overlay(bgr, cx, cy, r_pupil, r_iris)
+    # Overlay using the preprocessed image
+    overlay = draw_segmentation_overlay(pre, cx, cy, r_pupil, r_iris)
 
-    # normalize (rubber sheet)
+    # Normalize (rubber sheet)
     norm, _ = rubber_sheet(pre, cx, cy, r_pupil, r_iris, radial_res=radial_res, angular_res=angular_res)
-    
-    # feature extraction → IrisCode
-    iris_code = encode_iris(norm)
-    # store_iris_code(iris_code)
-   
-    
-    # save with incremented index
+
+    # Save with incremented index
     idx = next_index(out_dir)
     seg_path, nor_path = save_images(idx, overlay, norm, out_dir)
     return seg_path, nor_path, (cx, cy, r_pupil, r_iris)
