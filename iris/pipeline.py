@@ -45,7 +45,9 @@ def run_full_pipeline(image_path: str, out_root: str = "outputs",
     r_iris = find_iris(pre, cx, cy, r_pupil)
 
     # overlay
-    overlay = draw_segmentation_overlay(bgr, cx, cy, r_pupil, r_iris)
+    pre_bgr = cv2.cvtColor(pre, cv2.COLOR_GRAY2BGR)
+    overlay = draw_segmentation_overlay(pre_bgr, cx, cy, r_pupil, r_iris)
+   
 
     # normalize (rubber sheet)
     norm, _ = rubber_sheet(pre, cx, cy, r_pupil, r_iris, radial_res=radial_res, angular_res=angular_res)
