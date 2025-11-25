@@ -12,6 +12,9 @@ from iris.pipeline import build_iris_codes_dataset, run_full_pipeline, preproces
 
 from pathlib import Path
 from typing import Tuple, Optional
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+import matplotlib.pyplot as plt
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QPushButton,
@@ -106,6 +109,15 @@ class IrisApp(QWidget):
         self._output_dir = "outputs"
 
         self.setStyleSheet(self._qss())
+
+        #         # ROC plots
+        # self.verify_roc_canvas = None
+        # self.ident_roc_canvas = None
+        # self.last_genuine_scores = None
+        # self.last_impostor_scores = None
+        # self._roc_added_verify = False
+        # self._roc_added_ident = False
+
         self._build_ui()
 
     def _build_ui(self):
@@ -142,7 +154,7 @@ class IrisApp(QWidget):
         left_layout.setFormAlignment(Qt.AlignTop)
 
         self.verify_subject_input = QLineEdit()
-        self.verify_subject_input.setPlaceholderText("Enter subject name exactly (e.g. person_001)")
+        self.verify_subject_input.setPlaceholderText("Enter subject name exactly (e.g. 000_001)")
         left_layout.addRow("Subject name:", self.verify_subject_input)
 
         self.verify_image_path = QLineEdit()
@@ -185,12 +197,14 @@ class IrisApp(QWidget):
         self.verify_eer_label = QLabel("-")
         self.verify_far_label = QLabel("-")
         self.verify_frr_label = QLabel("-")
+        self.verify_acc_label = QLabel("-")
         stats_layout.addRow("Hamming:", self.verify_hamming_label)
         stats_layout.addRow("Similarity %:", self.verify_similarity_label)
         stats_layout.addRow("Matched Subject:", self.verify_matched_subject_label)
         stats_layout.addRow("ERR:", self.verify_eer_label)
         stats_layout.addRow("FAR:", self.verify_far_label)
         stats_layout.addRow("FRR:", self.verify_frr_label)
+        stats_layout.addRow("Accuracy:", self.verify_acc_label)
         stats_box.setLayout(stats_layout)
         right_layout.addWidget(stats_box)
         right_group.setLayout(right_layout)
@@ -262,6 +276,7 @@ class IrisApp(QWidget):
         self.ident_eer_label = QLabel("-")
         self.ident_far_label = QLabel("-")
         self.ident_frr_label = QLabel("-")
+        self.ident_acc_label = QLabel("-")
         stats_layout.addRow("Subject:", self.ident_match_subject_label)
         #stats_layout.addRow("Side (Left/Right):", self.ident_match_side_label)
         stats_layout.addRow("Hamming:", self.ident_match_hamming_label)
@@ -269,6 +284,7 @@ class IrisApp(QWidget):
         stats_layout.addRow("ERR:", self.ident_eer_label)
         stats_layout.addRow("FAR:", self.ident_far_label)
         stats_layout.addRow("FRR:", self.ident_frr_label)
+        stats_layout.addRow("Accuracy:", self.ident_acc_label)
         stats_box.setLayout(stats_layout)
         right_layout.addWidget(stats_box)
 
@@ -301,7 +317,7 @@ class IrisApp(QWidget):
         img_path = self.verify_image_path.text().strip()
         self.iris_codes="iris_codes"
         if not subject:
-            self.verify_result_box.setPlainText("Please enter a subject ID (e.g., person_000).")
+            self.verify_result_box.setPlainText("Please enter a subject ID (e.g., 000_000).")
             return
         if not img_path or not os.path.exists(img_path):
             self.verify_result_box.setPlainText("Please upload a valid .jpg image file.")
@@ -336,10 +352,11 @@ class IrisApp(QWidget):
             verified = hamming <= threshold
             matched_subject = subject if verified else "No Match"
            
-            eer, far, frr = self._compute_eer_from_db(db)
+            eer, far, frr ,acc= self._compute_eer_from_db(db)
             self.verify_eer_label.setText(f"{eer:.4f}")
             self.verify_far_label.setText(f"{far:.4f}")
             self.verify_frr_label.setText(f"{frr:.4f}")
+            self.verify_acc_label.setText(f"{acc:.4f}")
             # Update UI
             
             self.verify_hamming_label.setText(f"{hamming:.4f}")
@@ -422,10 +439,11 @@ class IrisApp(QWidget):
             confidence = "High" if hamming <= threshold else "Low"
             matched_subject = subject if hamming <= threshold else "Unknown"
           
-            eer, far, frr = self._compute_eer_from_db(db)
+            eer, far, frr ,acc= self._compute_eer_from_db(db)
             self.ident_eer_label.setText(f"{eer:.4f}")
             self.ident_far_label.setText(f"{far:.4f}")
             self.ident_frr_label.setText(f"{frr:.4f}")
+            self.ident_acc_label.setText(f"{acc:.4f}")
 
             # Update UI
             
@@ -448,45 +466,142 @@ class IrisApp(QWidget):
             self._clear_ident_results()
 
 
+    # def _compute_eer_from_db(self, db_dict: dict) -> Tuple[float, float, float]:
+    #     """
+    #     Returns (EER, FAR_at_EER, FRR_at_EER)
+    #     All values in [0, 1]
+    #     """
+    #     genuine = []   # intra-subject (same person)
+    #     impostor = []  # inter-subject (different people)
+
+    #     subjects = list(db_dict.keys())
+    #     codes = {s: np.array(db_dict[s], dtype=np.uint8) for s in subjects}
+
+    #     for i, s1 in enumerate(subjects):
+    #         c1 = codes[s1]
+    #         for s2 in subjects[i:]:
+    #             c2 = codes[s2]
+    #             h, _ = compare_templates(c1, c2)
+    #             if s1 == s2:
+    #                 genuine.append(h)
+    #             else:
+    #                 impostor.append(h)
+
+    #     if not impostor or not genuine:
+    #         return 0.0, 0.0, 0.0
+
+    #     genuine  = np.array(genuine)
+    #     impostor = np.array(impostor)
+
+    #     # # Save for ROC plotting
+    #     # self.last_genuine_scores = genuine
+    #     # self.last_impostor_scores = impostor
+    #     # # === Plot ROC if requested ===
+    #     # if plot_roc and (self.last_genuine_scores is not None):
+    #     #     self._plot_roc_curve(
+    #     #         self.last_genuine_scores,
+    #     #         self.last_impostor_scores,
+    #     #         eer
+    #     #     )
+
+
+    #     thresholds = np.linspace(0.0, 0.5, 500)
+    #     far = np.array([np.mean(impostor >= t) for t in thresholds])  # False Accept Rate
+    #     frr = np.array([np.mean(genuine  <  t) for t in thresholds])  # False Reject Rate
+
+    #     diff = np.abs(far - frr)
+    #     best_idx = np.argmin(diff)
+
+    #     eer = (far[best_idx] + frr[best_idx]) / 2.0
+    #     far_at_eer = far[best_idx]
+    #     frr_at_eer = frr[best_idx]
+
+    #     return float(eer), float(far_at_eer), float(frr_at_eer)
+
+
     def _compute_eer_from_db(self, db_dict: dict) -> Tuple[float, float, float]:
         """
-        Returns (EER, FAR_at_EER, FRR_at_EER)
-        All values in [0, 1]
+        Returns (EER, FAR_at_EER, FRR_at_EER) as fractions in [0, 1]
+        Assumes compare_templates returns Hamming distance (lower = better)
         """
-        genuine = []   # intra-subject (same person)
-        impostor = []  # inter-subject (different people)
-
+        genuine = []
+        impostor = []
         subjects = list(db_dict.keys())
         codes = {s: np.array(db_dict[s], dtype=np.uint8) for s in subjects}
 
         for i, s1 in enumerate(subjects):
             c1 = codes[s1]
-            for s2 in subjects[i:]:
+            for s2 in subjects[i:]:  # avoid double-counting
                 c2 = codes[s2]
-                h, _ = compare_templates(c1, c2)
+                hd, _ = compare_templates(c1, c2)  # Hamming distance
                 if s1 == s2:
-                    genuine.append(h)
+                    genuine.append(hd)
                 else:
-                    impostor.append(h)
+                    impostor.append(hd)
 
-        if not impostor or not genuine:
+        if not genuine or not impostor:
             return 0.0, 0.0, 0.0
 
-        genuine  = np.array(genuine)
+        genuine = np.array(genuine)
         impostor = np.array(impostor)
+        n_gen = len(genuine)
+        n_imp = len(impostor)
 
-        thresholds = np.linspace(0.0, 0.5, 500)
-        far = np.array([np.mean(impostor >= t) for t in thresholds])  # False Accept Rate
-        frr = np.array([np.mean(genuine  <  t) for t in thresholds])  # False Reject Rate
+        # Use more points for higher precision
+        thresholds = np.linspace(0.0, 0.5, 2000)
 
-        diff = np.abs(far - frr)
-        best_idx = np.argmin(diff)
+        # Correct direction for Hamming distance!
+        far = np.mean(impostor[None, :] <= thresholds[:, None], axis=1)  # vectorized
+        frr = np.mean(genuine[None, :] > thresholds[:, None], axis=1)   # vectorized
 
+        # Find EER
+        abs_diff = np.abs(far - frr)
+        best_idx = np.argmin(abs_diff)
         eer = (far[best_idx] + frr[best_idx]) / 2.0
-        far_at_eer = far[best_idx]
-        frr_at_eer = frr[best_idx]
+        Accuracy = 1.0 - (frr[best_idx] * n_gen + far[best_idx] * n_imp) / (n_gen + n_imp)
+        # Or simply: eer = far[best_idx]  (they are nearly equal)
 
-        return float(eer), float(far_at_eer), float(frr_at_eer)
+      
+
+        return float(eer), float(far[best_idx]), float(frr[best_idx]) , Accuracy
+
+
+    # def _plot_roc_curve(self, genuine_scores, impostor_scores, eer):
+    #     # Compute FAR and GAR (1 - FRR)
+    #     thresholds = np.sort(np.unique(np.concatenate((genuine_scores, impostor_scores))))
+    #     far = [np.mean(impostor_scores >= t) for t in thresholds]
+    #     gar = [np.mean(genuine_scores >= t) for t in thresholds]  # Genuine Accept Rate
+
+    #     # Clear previous plots
+    #     if self.verify_roc_canvas:
+    #         self.verify_roc_canvas.deleteLater()
+    #     if self.ident_roc_canvas:
+    #         self.ident_roc_canvas.deleteLater()
+
+    #     fig = Figure(figsize=(5, 4), dpi=100)
+    #     ax = fig.add_subplot(111)
+    #     ax.plot(far, gar, label=f'ROC (EER = {eer*100:.2f}%)', color='#4f46e5', linewidth=2)
+    #     ax.plot([0, 1], [0, 1], 'r--', label='Random guess')
+    #     ax.set_xlabel('False Accept Rate (FAR)')
+    #     ax.set_ylabel('Genuine Accept Rate (GAR)')
+    #     ax.set_title('Receiver Operating Characteristic (ROC)')
+    #     ax.legend(loc="lower right")
+    #     ax.grid(True, alpha=0.3)
+    #     ax.set_xlim(0, 1)
+    #     ax.set_ylim(0, 1)
+    #     fig.tight_layout()
+
+    #     canvas = FigureCanvas(fig)
+
+    #     # Add to Verification tab (under Accuracy)
+    #     verify_stats_layout = self.verify_acc_label.parent().layout()
+    #     verify_stats_layout.addRow("ROC Curve:", canvas)
+    #     self.verify_roc_canvas = canvas
+
+    #     # Add to Identification tab
+    #     ident_stats_layout = self.ident_acc_label.parent().layout()
+    #     ident_stats_layout.addRow("ROC Curve:", canvas)
+    #     self.ident_roc_canvas = canvas
 
 
     def _clear_ident_results(self):
