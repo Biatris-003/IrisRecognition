@@ -3,13 +3,22 @@ import cv2
 
 # Feature Extraction (Using Gabor filters)
 
-def gabor_filter_bank(size=(9, 9), frequency=0.5, sigma=3.0):
-    """Create a real + imaginary Gabor kernel."""
+def gabor_filter_bank(size=(9, 9), sigma=3.0, theta=0, lambd=4.0, gamma=1.0, psi=0):
+    """Return real and imaginary Gabor kernels."""
+    
     x = np.linspace(-size[0]//2, size[0]//2, size[0])
     y = np.linspace(-size[1]//2, size[1]//2, size[1])
     X, Y = np.meshgrid(x, y)
-    real = np.exp(-(X**2 + Y**2)/(2*sigma**2)) * np.cos(2*np.pi*frequency*X)
-    imag = np.exp(-(X**2 + Y**2)/(2*sigma**2)) * np.sin(2*np.pi*frequency*X)
+
+    # Rotation
+    x_prime = X * np.cos(theta) + Y * np.sin(theta)
+    y_prime = -X * np.sin(theta) + Y * np.cos(theta)
+
+    gaussian = np.exp(-(x_prime**2 + (gamma**2) * (y_prime**2)) / (2 * sigma**2))
+
+    real = gaussian * np.cos(2 * np.pi * x_prime / lambd + psi)
+    imag = gaussian * np.sin(2 * np.pi * x_prime / lambd + psi)
+
     return real, imag
 
 
